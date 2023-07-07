@@ -1,6 +1,5 @@
-#include <Databases/mongodb/fetchmongodbTableStructure.h>
-
-#if USE_LIBPQXX
+#include <string>
+#include <Databases/MongoDB/fetchMongoDBTableStructure.h>
 
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypeString.h>
@@ -14,9 +13,9 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim.hpp>
 #include <Common/quoteString.h>
-#include <Core/mongodb/Utils.h>
 #include <base/FnTraits.h>
 #include <IO/ReadHelpers.h>
+#include <Poco/MongoDB/Database.h>
 
 namespace DB
 {
@@ -27,9 +26,15 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
 }
 
+std::list<std::string> fetchMongoDBCollectionNames(const std::string& db_name)
+{
+    Poco::MongoDB::Database db(db_name);
+        auto command = db.createCommand();
+        command->selector().addNewDocument("$query").add("listCollections", 1);
+    Poco::MongoDB::ResponseMessage resp;
+}
 
-template<typename T>
-std::set<String> fetchmongodbTablesList(T & tx, const String & mongodb_schema)
+std::set<String> fetchMongoDBTablesList(const String & mongodb_schema)
 {
     Names schemas;
     boost::split(schemas, mongodb_schema, [](char c){ return c == ','; });
@@ -66,7 +71,7 @@ std::set<String> fetchmongodbTablesList(T & tx, const String & mongodb_schema)
 }
 
 
-static DataTypePtr convertmongodbDataType(String & type, Fn<void()> auto && recheck_array, bool is_nullable = false, uint16_t dimensions = 0)
+static DataTypePtr convertMongoDBDataType(String & type, Fn<void()> auto && recheck_array, bool is_nullable = false, uint16_t dimensions = 0)
 {
     DataTypePtr res;
     bool is_array = false;
@@ -160,11 +165,11 @@ static DataTypePtr convertmongodbDataType(String & type, Fn<void()> auto && rech
 
 
 template<typename T>
-mongodbTableStructure::ColumnsInfoPtr readNamesAndTypesList(
+MongoDBTableStructure::ColumnsInfoPtr readNamesAndTypesList(
     T & tx, const String & mongodb_table, const String & query, bool use_nulls, bool only_names_and_types)
 {
     auto columns = NamesAndTypes();
-    mongodbTableStructure::Attributes attributes;
+    MongoDBTableStructure::Attributes attributes;
 
     try
     {
@@ -197,7 +202,7 @@ mongodbTableStructure::ColumnsInfoPtr readNamesAndTypesList(
                     columns.push_back(NameAndTypePair(std::get<0>(row), data_type));
 
                     attributes.emplace_back(
-                    mongodbTableStructure::PGAttribute{
+                    MongoDBTableStructure::MongoDBAttribute{
                         .atttypid = parse<int>(std::get<4>(row)),
                         .atttypmod = parse<int>(std::get<5>(row)),
                     });
@@ -247,10 +252,10 @@ mongodbTableStructure::ColumnsInfoPtr readNamesAndTypesList(
 
 
 template<typename T>
-mongodbTableStructure fetchmongodbTableStructure(
+MongoDBTableStructure fetchmongodbTableStructure(
         T & tx, const String & mongodb_table, const String & mongodb_schema, bool use_nulls, bool with_primary_key, bool with_replica_identity_index)
 {
-    mongodbTableStructure table;
+    MongoDBTableStructure table;
 
     auto where = fmt::format("relname = {}", quoteString(mongodb_table));
     if (mongodb_schema.empty())
@@ -316,7 +321,7 @@ mongodbTableStructure fetchmongodbTableStructure(
 }
 
 
-mongodbTableStructure fetchmongodbTableStructure(pqxx::connection & connection, const String & mongodb_table, const String & mongodb_schema, bool use_nulls)
+MongoDBTableStructure fetchMongoDBTableStructure(pqxx::connection & connection, const String & mongodb_table, const String & mongodb_schema, bool use_nulls)
 {
     pqxx::ReadTransaction tx(connection);
     auto result = fetchmongodbTableStructure(tx, mongodb_table, mongodb_schema, use_nulls, false, false);
@@ -325,7 +330,7 @@ mongodbTableStructure fetchmongodbTableStructure(pqxx::connection & connection, 
 }
 
 
-std::set<String> fetchmongodbTablesList(pqxx::connection & connection, const String & mongodb_schema)
+std::set<String> fetchMongoDBTablesList(pqxx::connection & connection, const String & mongodb_schema)
 {
     pqxx::ReadTransaction tx(connection);
     auto result = fetchmongodbTablesList(tx, mongodb_schema);
@@ -335,28 +340,27 @@ std::set<String> fetchmongodbTablesList(pqxx::connection & connection, const Str
 
 
 template
-mongodbTableStructure fetchmongodbTableStructure(
+MongoDBTableStructure fetchMongoDBTableStructure(
         pqxx::ReadTransaction & tx, const String & mongodb_table, const String & mongodb_schema,
         bool use_nulls, bool with_primary_key, bool with_replica_identity_index);
 
 template
-mongodbTableStructure fetchmongodbTableStructure(
+MongoDBTableStructure fetchMongoDBTableStructure(
         pqxx::ReplicationTransaction & tx, const String & mongodb_table, const String & mongodb_schema,
         bool use_nulls, bool with_primary_key, bool with_replica_identity_index);
 
 template
-mongodbTableStructure fetchmongodbTableStructure(
+MongoDBTableStructure fetchMongoDBTableStructure(
         pqxx::nontransaction & tx, const String & mongodb_table, const String & postrges_schema,
         bool use_nulls, bool with_primary_key, bool with_replica_identity_index);
 
-std::set<String> fetchmongodbTablesList(pqxx::work & tx, const String & mongodb_schema);
+std::set<String> fetchMongoDBTablesList(pqxx::work & tx, const String & mongodb_schema);
 
 template
-std::set<String> fetchmongodbTablesList(pqxx::ReadTransaction & tx, const String & mongodb_schema);
+std::set<String> fetchMongoDBTablesList(pqxx::ReadTransaction & tx, const String & mongodb_schema);
 
 template
-std::set<String> fetchmongodbTablesList(pqxx::nontransaction & tx, const String & mongodb_schema);
+std::set<String> fetchMongoDBTablesList(pqxx::nontransaction & tx, const String & mongodb_schema);
 
 }
 
-#endif
