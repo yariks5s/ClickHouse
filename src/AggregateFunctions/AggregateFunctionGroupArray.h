@@ -39,11 +39,12 @@ enum class Sampler
     RNG,
 };
 
-template <bool Thas_limit, bool Tlast, Sampler Tsampler>
+template <bool Thas_limit, bool Tlast, bool Tsorted, Sampler Tsampler>
 struct GroupArrayTrait
 {
     static constexpr bool has_limit = Thas_limit;
     static constexpr bool last = Tlast;
+    static constexpr bool sorted = Tsorted;
     static constexpr Sampler sampler = Tsampler;
 };
 
@@ -52,6 +53,8 @@ static constexpr const char * getNameByTrait()
 {
     if (Trait::last)
         return "groupArrayLast";
+    if (Trait::sorted)
+        return "groupArraySorted";
     if (Trait::sampler == Sampler::NONE)
         return "groupArray";
     else if (Trait::sampler == Sampler::RNG)
@@ -89,6 +92,25 @@ struct GroupArraySamplerData
         {
             size_t j = genRandom(i + 1);
             std::swap(value[i], value[j]);
+        }
+    }
+
+    template <bool positive, T mapped>
+    void sort()
+    {
+        const ColumnArray::Offsets & offsets = value.getOffsets();
+
+        size_t size = offsets.size();
+        size_t nested_size = value.getData().size();
+        IColumn::Permutation permutation(nested_size);
+        for (size_t i = 0; i < nested_size; ++i)
+            permutation[i] = i;
+        ColumnArray::Offset current_offset = 0;
+        for (size_t i = 0; i < size; ++i)
+        {
+            auto next_offset = offsets[i];
+            ::sort(&permutation[current_offset], &permutation[next_offset], Less<positive>(*mapped));
+            current_offset = next_offset;
         }
     }
 };
@@ -156,6 +178,7 @@ public:
         [[maybe_unused]] auto a = new (place) Data;
         if constexpr (Trait::sampler == Sampler::RNG)
             a->rng.seed(seed);
+        /// NOTE is this ok for performance?
     }
 
     void add(AggregateDataPtr __restrict place, const IColumn ** columns, size_t row_num, Arena * arena) const override
@@ -200,7 +223,7 @@ public:
 
         if constexpr (Trait::last)
             mergeNoSamplerLast(cur_elems, rhs_elems, arena);
-        else if constexpr (Trait::sampler == Sampler::NONE)
+        else if constexpr (Trait::sampler == Sampler::NONE || Trait::sorted)
             mergeNoSampler(cur_elems, rhs_elems, arena);
         else if constexpr (Trait::sampler == Sampler::RNG)
             mergeWithRNGSampler(cur_elems, rhs_elems, arena);
@@ -490,7 +513,7 @@ public:
 
         ++cur_elems.total_values;
 
-        if constexpr (Trait::sampler == Sampler::NONE)
+        if constexpr (Trait::sampler == Sampler::NONE || Trait::sorted)
         {
             if (limit_num_elems && cur_elems.value.size() >= max_elems)
             {
@@ -529,7 +552,7 @@ public:
 
         if constexpr (Trait::last)
             mergeNoSamplerLast(cur_elems, rhs_elems, arena);
-        else if constexpr (Trait::sampler == Sampler::NONE)
+        else if constexpr (Trait::sampler == Sampler::NONE || Trait::sorted)
             mergeNoSampler(cur_elems, rhs_elems, arena);
         else if constexpr (Trait::sampler == Sampler::RNG)
             mergeWithRNGSampler(cur_elems, rhs_elems, arena);

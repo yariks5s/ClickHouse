@@ -1,3 +1,4 @@
+#include <c.h>
 #include <AggregateFunctions/AggregateFunctionFactory.h>
 #include <AggregateFunctions/AggregateFunctionGroupArray.h>
 #include <AggregateFunctions/Helpers.h>
@@ -43,7 +44,7 @@ inline AggregateFunctionPtr createAggregateFunctionGroupArrayImpl(const DataType
 }
 
 
-template <bool Tlast>
+template <bool Tlast, bool Tsorted>
 AggregateFunctionPtr createAggregateFunctionGroupArray(
     const std::string & name, const DataTypes & argument_types, const Array & parameters, const Settings *)
 {
@@ -77,10 +78,10 @@ AggregateFunctionPtr createAggregateFunctionGroupArray(
     {
         if (Tlast)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "groupArrayLast make sense only with max_elems (groupArrayLast(max_elems)())");
-        return createAggregateFunctionGroupArrayImpl<GroupArrayTrait</* Thas_limit= */ false, Tlast, /* Tsampler= */ Sampler::NONE>>(argument_types[0], parameters);
+        return createAggregateFunctionGroupArrayImpl<GroupArrayTrait</* Thas_limit= */ false, Tlast, Tsorted, /* Tsampler= */ Sampler::NONE>>(argument_types[0], parameters);
     }
     else
-        return createAggregateFunctionGroupArrayImpl<GroupArrayTrait</* Thas_limit= */ true, Tlast, /* Tsampler= */ Sampler::NONE>>(argument_types[0], parameters, max_elems);
+        return createAggregateFunctionGroupArrayImpl<GroupArrayTrait</* Thas_limit= */ true, Tlast, Tsorted, /* Tsampler= */ Sampler::NONE>>(argument_types[0], parameters, max_elems);
 }
 
 AggregateFunctionPtr createAggregateFunctionGroupArraySample(
@@ -113,7 +114,7 @@ AggregateFunctionPtr createAggregateFunctionGroupArraySample(
     else
         seed = thread_local_rng();
 
-    return createAggregateFunctionGroupArrayImpl<GroupArrayTrait</* Thas_limit= */ true, /* Tlast= */ false, /* Tsampler= */ Sampler::RNG>>(argument_types[0], parameters, max_elems, seed);
+    return createAggregateFunctionGroupArrayImpl<GroupArrayTrait</* Thas_limit= */ true, /* Tlast= */ false, /*Tsorted=*/ false, /* Tsampler= */ Sampler::RNG>>(argument_types[0], parameters, max_elems, seed);
 }
 
 }
@@ -126,6 +127,7 @@ void registerAggregateFunctionGroupArray(AggregateFunctionFactory & factory)
     factory.registerFunction("groupArray", { createAggregateFunctionGroupArray<false>, properties });
     factory.registerFunction("groupArraySample", { createAggregateFunctionGroupArraySample, properties });
     factory.registerFunction("groupArrayLast", { createAggregateFunctionGroupArray<true>, properties });
+    factory.registerFunction("groupArraySorted", {createAggregateFunctionGroupArray<false, true>, properties});
 }
 
 }
