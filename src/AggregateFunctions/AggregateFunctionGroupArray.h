@@ -95,24 +95,24 @@ struct GroupArraySamplerData
         }
     }
 
-    template <bool positive, T mapped>
-    void sort()
-    {
-        const ColumnArray::Offsets & offsets = value.getOffsets();
+    // template <bool positive, mapped>
+    // void sort()
+    // {
+    //     const ColumnArray::Offsets & offsets = value.getOffsets();
 
-        size_t size = offsets.size();
-        size_t nested_size = value.getData().size();
-        IColumn::Permutation permutation(nested_size);
-        for (size_t i = 0; i < nested_size; ++i)
-            permutation[i] = i;
-        ColumnArray::Offset current_offset = 0;
-        for (size_t i = 0; i < size; ++i)
-        {
-            auto next_offset = offsets[i];
-            ::sort(&permutation[current_offset], &permutation[next_offset], Less<positive>(*mapped));
-            current_offset = next_offset;
-        }
-    }
+    //     size_t size = offsets.size();
+    //     size_t nested_size = value.getData().size();
+    //     IColumn::Permutation permutation(nested_size);
+    //     for (size_t i = 0; i < nested_size; ++i)
+    //         permutation[i] = i;
+    //     ColumnArray::Offset current_offset = 0;
+    //     for (size_t i = 0; i < size; ++i)
+    //     {
+    //         auto next_offset = offsets[i];
+    //         ::sort(&permutation[current_offset], &permutation[next_offset], Less<positive>(*mapped));
+    //         current_offset = next_offset;
+    //     }
+    // }
 };
 
 /// A particular case is an implementation for numeric types.

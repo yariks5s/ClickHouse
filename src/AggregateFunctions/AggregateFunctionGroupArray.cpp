@@ -1,4 +1,3 @@
-#include <c.h>
 #include <AggregateFunctions/AggregateFunctionFactory.h>
 #include <AggregateFunctions/AggregateFunctionGroupArray.h>
 #include <AggregateFunctions/Helpers.h>
@@ -26,6 +25,7 @@ IAggregateFunction * createWithNumericOrTimeType(const IDataType & argument_type
     WhichDataType which(argument_type);
     if (which.idx == TypeIndex::Date) return new AggregateFunctionTemplate<UInt16, Data>(std::forward<TArgs>(args)...);
     if (which.idx == TypeIndex::DateTime) return new AggregateFunctionTemplate<UInt32, Data>(std::forward<TArgs>(args)...);
+    if (which.idx == TypeIndex::IPv4) return new AggregateFunctionTemplate<IPv4, Data>(std::forward<TArgs>(args)...);
     return createWithNumericType<AggregateFunctionTemplate, Data, TArgs...>(argument_type, std::forward<TArgs>(args)...);
 }
 
@@ -124,9 +124,11 @@ void registerAggregateFunctionGroupArray(AggregateFunctionFactory & factory)
 {
     AggregateFunctionProperties properties = { .returns_default_when_only_null = true, .is_order_dependent = true };
 
-    factory.registerFunction("groupArray", { createAggregateFunctionGroupArray<false>, properties });
+    factory.registerFunction("groupArray", { createAggregateFunctionGroupArray<false, false>, properties });
+    factory.registerAlias("array_agg", "groupArray", AggregateFunctionFactory::CaseInsensitive);
+    // factory.registerAliasUnchecked("array_concat_agg", "groupArrayArray", AggregateFunctionFactory::CaseInsensitive);
     factory.registerFunction("groupArraySample", { createAggregateFunctionGroupArraySample, properties });
-    factory.registerFunction("groupArrayLast", { createAggregateFunctionGroupArray<true>, properties });
+    factory.registerFunction("groupArrayLast", { createAggregateFunctionGroupArray<true, false>, properties });
     factory.registerFunction("groupArraySorted", {createAggregateFunctionGroupArray<false, true>, properties});
 }
 
