@@ -38,10 +38,13 @@
 #include <Interpreters/castColumn.h>
 #include <base/TypeList.h>
 #include <base/map.h>
+#include "Common/Exception.h"
+#include "Common/ZooKeeper/IKeeper.h"
 #include <Common/FieldVisitorsAccurateComparison.h>
 #include <Common/assert_cast.h>
 #include <Common/typeid_cast.h>
 #include <Common/Arena.h>
+#include "Core/ColumnNumbers.h"
 #include <Core/ColumnWithTypeAndName.h>
 #include <base/types.h>
 #include <Columns/ColumnArray.h>
@@ -1156,12 +1159,12 @@ class FunctionBinaryArithmetic : public IFunction
         return function->execute(arguments, result_type, input_rows_count);
     }
 
-    ColumnPtr executeArrayImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type, size_t input_rows_count) const
+    ColumnPtr executeArraysImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type, size_t input_rows_count) const
     {
         const auto * return_type_array = checkAndGetDataType<DataTypeArray>(result_type.get());
 
         if (!return_type_array)
-            throw Exception(ErrorCodes::LOGICAL_ERROR, "Return type for function {} must be array.", getName());
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Return type for function {} must be array", getName());
 
         auto num_args = arguments.size();
         DataTypes data_types;
@@ -1209,6 +1212,70 @@ class FunctionBinaryArithmetic : public IFunction
         auto res = executeImpl(new_arguments, result_array_type, rows_count);
 
         return ColumnArray::create(res, typeid_cast<const ColumnArray *>(arguments[0].column.get())->getOffsetsPtr());
+    }
+
+    ColumnPtr executeArrayWithNumericImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type, size_t input_rows_count) const
+    {
+        const auto * return_type_array = checkAndGetDataType<DataTypeArray>(result_type.get());
+
+        if (!return_type_array)
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Return type for function {} must be array", getName());
+
+        auto num_args = arguments.size();
+        DataTypes data_types;
+
+        ColumnsWithTypeAndName new_arguments {num_args};
+        DataTypePtr result_array_type;
+
+        const auto * left_const = typeid_cast<const ColumnConst *>(arguments[0].column.get());
+        const auto * right_const = typeid_cast<const ColumnConst *>(arguments[1].column.get());
+
+        /// Unpacking arrays if both are constants.
+        if (left_const && right_const)
+        {
+            new_arguments[0] = {left_const->getDataColumnPtr(), arguments[0].type, arguments[0].name};
+            new_arguments[1] = {right_const->getDataColumnPtr(), arguments[1].type, arguments[1].name};
+            auto col = executeImpl(new_arguments, result_type, 1);
+            return ColumnConst::create(std::move(col), input_rows_count);
+        }
+
+        /// Unpacking arrays if at least one column is constant.
+        if (left_const || right_const)
+        {
+            new_arguments[0] = {arguments[0].column->convertToFullColumnIfConst(), arguments[0].type, arguments[0].name};
+            new_arguments[1] = {arguments[1].column->convertToFullColumnIfConst(), arguments[1].type, arguments[1].name};
+            return executeImpl(new_arguments, result_type, input_rows_count);
+        }
+
+        const auto * left_array_col = typeid_cast<const ColumnArray *>(arguments[0].column.get());
+        const auto & left_array_type = typeid_cast<const DataTypeArray *>(arguments[0].type.get())->getNestedType();
+
+        new_arguments[0] = {left_array_col->getDataPtr(), left_array_type, arguments[0].name};
+        new_arguments[1] = {arguments[1].column.get()->convertToFullColumnIfConst(), arguments[1].type.get()->getPtr(), arguments[1].name};
+
+        result_array_type = left_array_type;
+
+        size_t rows_count = 0;
+        const auto & left_offsets = left_array_col->getOffsets();
+
+        if (!left_offsets.empty())
+            rows_count = left_offsets.back();
+
+        // ColumnsWithTypeAndName new_args {num_args};
+        // auto callback = [&]([[maybe_unused]]IColumn & subcolumn)
+        // {
+        //     std::cerr << "--------------------------------" << subcolumn.dumpStructure() << std::endl; 
+        //     // new_args[0] = {subcolumn.getPtr(), arguments[0].type.get()->getPtr(), arguments[0].name};
+        //     // new_args[1] = {arguments[1].column.get()->convertToFullColumnIfConst(), arguments[1].type.get()->getPtr(), arguments[1].name};
+            
+        //     // subcolumn = *executeImpl(new_args, result_array_type, rows_count).get();
+        // };
+        // callback(*new_arguments[0]);
+        // new_arguments[0].column->forEachSubcolumn(callback);
+
+        auto res = executeImpl(new_arguments, result_array_type, rows_count);
+
+        return ColumnArray::create(res, left_array_col->getOffsetsPtr());
     }
 
     ColumnPtr executeTupleNumberOperator(const ColumnsWithTypeAndName & arguments, const DataTypePtr & result_type,
@@ -1420,6 +1487,18 @@ public:
                 DataTypes new_arguments {
                         static_cast<const DataTypeArray &>(*arguments[0]).getNestedType(),
                         static_cast<const DataTypeArray &>(*arguments[1]).getNestedType(),
+                };
+                return std::make_shared<DataTypeArray>(getReturnTypeImplStatic(new_arguments, context));
+            }
+        }
+
+        if constexpr (is_multiply || is_division)
+        {
+            if (isArray(arguments[0]) && isNumber(arguments[1]))
+            {
+                DataTypes new_arguments {
+                        static_cast<const DataTypeArray &>(*arguments[0]).getNestedType(),
+                        arguments[1]->getPtr(),
                 };
                 return std::make_shared<DataTypeArray>(getReturnTypeImplStatic(new_arguments, context));
             }
@@ -2132,7 +2211,11 @@ ColumnPtr executeStringInteger(const ColumnsWithTypeAndName & arguments, const A
         });
 
         if (isArray(result_type))
-            return executeArrayImpl(arguments, result_type, input_rows_count);
+        {
+            if (!isArray(arguments[0].type) || !isArray(arguments[1].type))
+                return executeArrayWithNumericImpl(arguments, result_type, input_rows_count);
+            return executeArraysImpl(arguments, result_type, input_rows_count);
+        }
 
         if (!valid)
         {
