@@ -10,7 +10,6 @@ namespace DB
  * Use ENGINE = MongoDB(host:port, database, collection, user, password [, options]);
  * Read only.
  */
-
 class StorageMongoDB final : public IStorage
 {
 public:
@@ -57,6 +56,7 @@ public:
 
     static Configuration getConfiguration(ASTs engine_args, ContextPtr context);
 
+    ColumnsDescription getTableStructureFromData(Poco::MongoDB::Connection connection, std::string database_name, std::string collection_name);
 private:
     void connectIfNotConnected();
 
