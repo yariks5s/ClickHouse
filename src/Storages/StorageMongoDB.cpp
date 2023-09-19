@@ -12,8 +12,12 @@
 #include <Interpreters/evaluateConstantExpression.h>
 #include <Core/Settings.h>
 #include <Interpreters/Context.h>
+#include <Common/Exception.h>
 #include <Common/parseAddress.h>
 #include <Common/NamedCollections/NamedCollections.h>
+#include <DataTypes/IDataType.h>
+#include <DataTypes/getLeastSupertype.h>
+#include <base/types.h>
 #include <Core/ExternalResultDescription.h>
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeDateTime.h>
@@ -30,7 +34,9 @@
 #include <QueryPipeline/Pipe.h>
 #include <Processors/Sources/MongoDBSource.h>
 #include <Processors/Sinks/SinkToStorage.h>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -44,6 +50,8 @@ namespace DB
 
 using ValueType = ExternalResultDescription::ValueType;
 using ObjectId = Poco::MongoDB::ObjectId;
+using MongoArray = Poco::MongoDB::Array;
+
 namespace ErrorCodes
 {
     extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
@@ -244,67 +252,69 @@ private:
     const bool is_wire_protocol_old;
 };
 
-DataTypePtr findType(ValueType type)
+DataTypePtr findType(int type, [[maybe_unused]]std::string name)
 {
     switch (type)
         {
-            case ValueType::vtUInt8:
-                return std::shared_ptr<DataTypeUInt8>();
-            case ValueType::vtUInt16:
-                return std::shared_ptr<DataTypeUInt16>();
-            case ValueType::vtUInt32:
-                return std::shared_ptr<DataTypeUInt32>();
-            case ValueType::vtUInt64:
-                return std::shared_ptr<DataTypeUInt64>();
-            case ValueType::vtInt8:
-                return std::shared_ptr<DataTypeInt8>();
-            case ValueType::vtInt16:
-                return std::shared_ptr<DataTypeInt16>();
-            case ValueType::vtInt32:
+            case Poco::MongoDB::ElementTraits<Int32>::TypeId:
                 return std::shared_ptr<DataTypeInt32>();
-            case ValueType::vtInt64:
+            case Poco::MongoDB::ElementTraits<Poco::Int64>::TypeId:
                 return std::shared_ptr<DataTypeInt64>();
-            case ValueType::vtFloat32:
-                return std::shared_ptr<DataTypeFloat32>();
-            case ValueType::vtFloat64:
+            case Poco::MongoDB::ElementTraits<Float64>::TypeId:
                 return std::shared_ptr<DataTypeFloat64>();
-            case ValueType::vtEnum8:
-                return std::shared_ptr<DataTypeEnum8>();
-            case ValueType::vtEnum16:
-                return std::shared_ptr<DataTypeEnum16>();
-            case ValueType::vtString:
+            case Poco::MongoDB::ElementTraits<bool>::TypeId:
+                return std::shared_ptr<DataTypeUInt8>();
+            case Poco::MongoDB::ElementTraits<String>::TypeId:
                 return std::shared_ptr<DataTypeString>();
-            case ValueType::vtDate:
-                return std::shared_ptr<DataTypeDate>();
-            case ValueType::vtDateTime:
+            case Poco::MongoDB::ElementTraits<Poco::Timestamp>::TypeId:
                 return std::shared_ptr<DataTypeDateTime>();
-            case ValueType::vtUUID:
-                return std::shared_ptr<DataTypeUUID>();
-            case ValueType::vtArray:
+            case Poco::MongoDB::ElementTraits<MongoArray::Ptr>::TypeId:
                 return std::shared_ptr<DataTypeArray>();
+            case Poco::MongoDB::ElementTraits<ObjectId::Ptr>::TypeId:
+                return std::shared_ptr<DataTypeUUID>();
+                /// TODO: Enhance Array type
+            case Poco::MongoDB::ElementTraits<Poco::MongoDB::NullValue>::TypeId:
+                return nullptr; /// Maybe throw exception
             default:
                 return nullptr;
         }
 }
 
+void insertTypeToNames(std::unordered_map<std::string, DataTypePtr> & dict, std::string const name, DataTypePtr type)
+{
+    if (dict.find(name) != dict.end())
+    {
+        if (dict[name] != type)
+        {
+            DataTypes data_types = {type, dict[name]};
+            dict[name] = getLeastSupertype(data_types) ? getLeastSupertype(data_types) :
+                                                        throw Exception(ErrorCodes::UNKNOWN_TYPE,
+                                                        "Cannot parse types for {}", name);
+            return;
+        }
+        else
+            return;
+    }
+    dict[name] = type;
+}
+
 ColumnsDescription getTableStructureFromData(Poco::MongoDB::Connection connection, std::string database_name, std::string collection_name)
 {
     ColumnsDescription res = ColumnsDescription();
-    ExternalResultDescription description;
-    MongoDBCursor cursor(database_name, collection_name, description.sample_block, query, connection);
+    Poco::MongoDB::Document query = Poco::MongoDB::Document{};
+    MongoDBCursor cursor(database_name, collection_name, Block{}, query, connection);
     // std::vector<std::string> list_of_types;
-    MutableColumns columns(description.sample_block.columns());
-    const size_t size = columns.size();
+    // MutableColumns columns(description.sample_block.columns());
+    // const size_t size = columns.size();
 
     size_t num_rows = 0;
     Array types;
     DataTypePtr element_type;
     auto documents = cursor.nextDocuments(connection);
-    size_t lost_type_idx;
+    std::unordered_map<String, DataTypePtr> names_to_types;
 
     for (auto document : documents)
     {
-        bool is_all_processed = true;
         if (document->exists("ok") && document->exists("$err")
             && document->exists("code") && document->getInteger("ok") == 0)
         {
@@ -314,10 +324,10 @@ ColumnsDescription getTableStructureFromData(Poco::MongoDB::Connection connectio
             throw Exception(ErrorCodes::MONGODB_ERROR, "Got error from MongoDB: {}, code: {}", message, code);
         }
         ++num_rows;
-        for (const auto idx : collections::range(0, size))
+        std::vector<std::string> elem_names = {};
+        document->elementNames(elem_names);
+        for (const auto &name : elem_names)
         {
-            const auto & name = description.sample_block.getByPosition(idx).name;
-
             bool exists_in_current_document = document->exists(name);
             if (!exists_in_current_document)
             {
@@ -326,45 +336,17 @@ ColumnsDescription getTableStructureFromData(Poco::MongoDB::Connection connectio
 
             const Poco::MongoDB::Element::Ptr value = document->get(name);
 
-            if (value.isNull() || value->type() == Poco::MongoDB::ElementTraits<Poco::MongoDB::NullValue>::TypeId)
-            {
-                element_type = findType(description.types[idx].first);
-            }
-            else
-            {
-                bool is_nullable = description.types[idx].second;
-                if (is_nullable)
-                {
-                    ColumnNullable & column_nullable = assert_cast<ColumnNullable &>(*columns[idx]);
-                    element_type = findType(description.types[idx].first);
-                    column_nullable.getNullMapData().emplace_back(0);
-                }
-                else
-                    element_type = findType(description.types[idx].first);
-            }
-            if (res.empty())            /// If we cannot find type for some row, right after that we go to another document and
-            {                           /// continue from the point that we lost the type, and do it each time we lose the type
-                lost_type_idx = idx;
-                is_all_processed = false;
-                break;
-            }
-            else if (!is_all_processed && lost_type_idx == idx)
-                is_all_processed = true;
-
-            if (is_all_processed)
-            {
-                ColumnDescription column(name, element_type);
-                res.add(column);
-            }
+            element_type = findType(value->type(), name);
+            insertTypeToNames(names_to_types, name, element_type);
         }
-        if (is_all_processed)
-            break;
-
         // Allocate this data somewhere
 
         if (num_rows == input_format_max_rows_to_read_for_schema_inference)
-            throw Exception(ErrorCodes::MONGODB_ERROR, "Cannot inference schema: too many attempts");
+            throw Exception(ErrorCodes::MONGODB_ERROR, "Cannot infer schema: too many attempts");
     }
+    for (const auto& [key, value] : names_to_types)
+        if (value == nullptr)
+            throw Exception(ErrorCodes::INCORRECT_DATA, "Cannot infer schema from given data");
 
     return res;
 }
