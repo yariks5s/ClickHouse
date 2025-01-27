@@ -2437,6 +2437,20 @@ Result:
 
 - [toStartOfInterval](#tostartofinterval)
 
+**Note:** in case of using negative datetime values (before `1970-01-01`) as arguments for this function, please consider using the [date_trunc_allow_negative](#date_trunc_allow_negative) function, which supports these cases.
+
+## date\_trunc\_allow\_negative
+
+Works pretty much the same as [date_trunc](#date_trunc) function but works correctly with negative date/datetime values (before 1970-01-01) as function arguments, because it returns only Date32/DateTime64.
+
+**Syntax**
+``` sql
+date_trunc_allow_negative(unit, value[, timezone])
+```
+
+Alias: `dateTruncAllowNegative`.
+
+
 ## date\_add
 
 Adds the time interval or date interval to the provided date or date with time.

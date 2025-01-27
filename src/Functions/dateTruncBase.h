@@ -4,6 +4,7 @@
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypeDate32.h>
 #include <DataTypes/DataTypeDateTime.h>
+#include <DataTypes/DataTypeDateTime64.h>
 #include <DataTypes/DataTypeInterval.h>
 #include <Formats/FormatSettings.h>
 #include <Functions/DateTimeTransforms.h>
@@ -19,17 +20,20 @@ namespace ErrorCodes
     extern const int BAD_ARGUMENTS;
 }
 
-namespace
+enum class ResultType
 {
+    Date,
+    Date32,
+    DateTime,
+    DateTime64,
+};
 
-class FunctionDateTrunc : public IFunction
+class FunctionDateTruncBase : public IFunction
 {
 public:
     static constexpr auto name = "dateTrunc";
 
-    explicit FunctionDateTrunc(ContextPtr context_) : context(context_) {}
-
-    static FunctionPtr create(ContextPtr context) { return std::make_shared<FunctionDateTrunc>(context); }
+    explicit FunctionDateTruncBase(ContextPtr context_) : context(context_) {}
 
     String getName() const override { return name; }
 
@@ -37,17 +41,15 @@ public:
     bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return false; }
     size_t getNumberOfArguments() const override { return 0; }
 
+    ContextPtr context;
+
+    virtual ResultType decideReturnType(IntervalKind::Kind datepart_kind) const = 0;
+
     DataTypePtr getReturnTypeImpl(const ColumnsWithTypeAndName & arguments) const override
     {
         /// The first argument is a constant string with the name of datepart.
 
-        enum ResultType
-        {
-            Date,
-            Date32,
-            DateTime,
-            DateTime64,
-        };
+        
         ResultType result_type;
 
         String datepart_param;
@@ -65,14 +67,7 @@ public:
             if (!IntervalKind::tryParseString(datepart_param, datepart_kind))
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "{} doesn't look like datepart name in {}", datepart_param, getName());
 
-            if ((datepart_kind == IntervalKind::Kind::Year) || (datepart_kind == IntervalKind::Kind::Quarter)
-                || (datepart_kind == IntervalKind::Kind::Month) || (datepart_kind == IntervalKind::Kind::Week))
-                result_type = ResultType::Date;
-            else if ((datepart_kind == IntervalKind::Kind::Day) || (datepart_kind == IntervalKind::Kind::Hour)
-                    || (datepart_kind == IntervalKind::Kind::Minute) || (datepart_kind == IntervalKind::Kind::Second))
-                result_type = ResultType::DateTime;
-            else
-                result_type = ResultType::DateTime64;
+            result_type = decideReturnType(datepart_kind);
         };
 
         bool second_argument_is_date = false;
@@ -119,14 +114,7 @@ public:
                 getName(), arguments.size());
         }
 
-        if (result_type == ResultType::Date)
-            return std::make_shared<DataTypeDate>();
-        if (result_type == ResultType::Date32)
-            return std::make_shared<DataTypeDate32>();
-        if (result_type == ResultType::DateTime)
-            return std::make_shared<DataTypeDateTime>(extractTimeZoneNameFromFunctionArguments(arguments, 2, 1, false));
-
-        size_t scale;
+        size_t scale = 0;
         if (datepart_kind == IntervalKind::Kind::Millisecond)
             scale = 3;
         else if (datepart_kind == IntervalKind::Kind::Microsecond)
@@ -167,20 +155,8 @@ public:
         return { .is_monotonic = true, .is_always_monotonic = true };
     }
 
-private:
-    ContextPtr context;
+protected:
     mutable IntervalKind::Kind datepart_kind = IntervalKind::Kind::Second;
 };
-
-}
-
-
-REGISTER_FUNCTION(DateTrunc)
-{
-    factory.registerFunction<FunctionDateTrunc>();
-
-    /// Compatibility alias.
-    factory.registerAlias("DATE_TRUNC", "dateTrunc", FunctionFactory::Case::Insensitive);
-}
 
 }
